@@ -43,9 +43,9 @@ def node_analyze(state):
     with console.status("[dim]LLM reviewing the diff...[/dim]"):
         analysis = llm.invoke([
             {"role": "system", "content": (
-                "Senior reviewer. Structured output. "
-                # TODO: add an instruction: if confidence < 60%, populate escalation_questions
-                # with 2–4 specific, context-rich questions (reference which file/section in the diff).
+                "Senior reviewer. Trả lời tất cả các trường text (summary, confidence_reasoning, comments, và questions) bằng tiếng Việt. "
+                "If confidence < 60%, populate escalation_questions "
+                "with 2–4 specific, context-rich questions referencing relevant sections in the diff."
             )},
             {"role": "user", "content": f"Title: {state['pr_title']}\nDiff:\n{state['pr_diff']}"},
         ])
@@ -68,24 +68,45 @@ def node_escalate(state: ReviewState) -> dict:
     a = state["analysis"]
     questions = a.escalation_questions
     if not questions:
-        # fallback when the LLM didn't generate any questions
         questions = ["What is the intent of this PR?", "Any migration concerns?"]
 
-    # TODO: call interrupt(payload) where payload kind="escalation" contains:
-    #       pr_url, confidence, confidence_reasoning, summary, risk_factors, questions.
-    # answers = interrupt({...})
-    # return {"escalation_answers": answers}
-    raise NotImplementedError("Call interrupt() with an escalation payload")
+    answers = interrupt({
+        "kind": "escalation",
+        "pr_url": state["pr_url"],
+        "confidence": a.confidence,
+        "confidence_reasoning": a.confidence_reasoning,
+        "summary": a.summary,
+        "risk_factors": a.risk_factors,
+        "questions": questions,
+    })
+    return {"escalation_answers": answers}
 
 
 def node_synthesize(state: ReviewState) -> dict:
     """Re-prompt LLM with the reviewer's answers and produce a refined review."""
-    # TODO:
-    #   - read state["escalation_answers"] (dict[question, answer])
-    #   - call get_llm().with_structured_output(PRAnalysis).invoke(...) with a prompt
-    #     containing the original diff + initial analysis + Q&A.
-    #   - return {"analysis": refined, "final_action": "escalated_then_synthesized"}
-    raise NotImplementedError("Synthesize a refined PRAnalysis using the reviewer answers")
+    llm = get_llm().with_structured_output(PRAnalysis)
+    
+    qa_str = "\n".join([f"Q: {q}\nA: {a}" for q, a in state["escalation_answers"].items()])
+    
+    prompt = f"""Bạn đã review PR này với độ tin cậy thấp. 
+Người review (con người) đã trả lời các câu hỏi của bạn. 
+Hãy tổng hợp lại kết quả review cuối cùng dựa trên thông tin mới này.
+LƯU Ý: Viết tất cả kết quả (summary, reasoning, comments) bằng tiếng Việt.
+
+Tiêu đề PR: {state['pr_title']}
+Diff:
+{state['pr_diff']}
+
+Phân tích ban đầu của bạn:
+{state['analysis'].model_dump_json()}
+
+Phản hồi từ con người:
+{qa_str}
+"""
+    with console.status("[dim]Synthesizing refined review...[/dim]"):
+        refined = llm.invoke(prompt)
+    
+    return {"analysis": refined, "final_action": "escalated_then_synthesized"}
 
 
 def node_human_approval(state):
@@ -125,7 +146,8 @@ def build_graph():
     g.add_edge("auto_approve", END)
     g.add_edge("human_approval", "commit")
     g.add_edge("commit", END)
-    # TODO: wire escalate → synthesize → END
+    g.add_edge("escalate", "synthesize")
+    g.add_edge("synthesize", END)
     return g.compile(checkpointer=MemorySaver())
 
 

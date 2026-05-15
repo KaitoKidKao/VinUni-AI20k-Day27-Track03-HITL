@@ -15,7 +15,7 @@ HumanChoice = Literal["approve", "reject", "edit"]
 
 # Confidence thresholds
 AUTO_APPROVE_THRESHOLD = 0.85   # >= 85% → no human, agent commits
-ESCALATE_THRESHOLD = 0.60       # < 60% → escalate with questions
+ESCALATE_THRESHOLD = 0.80       # < 80% → escalate với các câu hỏi
 # 60–85% → human approval flow
 
 
